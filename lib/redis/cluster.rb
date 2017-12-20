@@ -117,11 +117,16 @@ class Redis
       node_key = @slot_node_key_maps[slot]
       @available_nodes.fetch(node_key)
     rescue Exception => ex
-      reconnect if ex.class == KeyError
+      if ex.class == KeyError
+        reconnect
 
-      if tries > 0
-        tries -= 1
-        retry
+        if tries > 0
+          tries -= 1
+          retry
+        else
+          raise ex
+        end
+
       else
         raise ex
       end
