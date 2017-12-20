@@ -37,7 +37,7 @@ class Redis
       reconnect
     end
 
-    def reconnect(reply = 1)
+    def reconnect
       startup_nodes = build_clients_per_node(@node_addrs, @options)
       available_slots = fetch_available_slots_per_node(startup_nodes.values)
 
