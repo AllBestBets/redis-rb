@@ -37,7 +37,7 @@ class Redis
       reconnect
     end
 
-    def reconnect
+    def reconnect(reply = 1)
       startup_nodes = build_clients_per_node(@node_addrs, @options)
       available_slots = fetch_available_slots_per_node(startup_nodes.values)
 
@@ -110,6 +110,7 @@ class Redis
     # @return [Redis] a instance of random node client if the slot number is nil
     # @return [nil] nil if client not cached slot information
     def find_node(slot = nil)
+      tries ||= 1
       return nil unless instance_variable_defined?(:@available_nodes)
       return @available_nodes.values.sample if slot.nil? || !@slot_node_key_maps.key?(slot)
 
@@ -117,7 +118,13 @@ class Redis
       @available_nodes.fetch(node_key)
     rescue Exception => ex
       reconnect if ex.class == KeyError
-      raise ex
+
+      if tries > 0
+        tries -= 1
+        retry
+      else
+        raise ex
+      end
     end
 
     # Sends the command and returns its reply. Redirections may occur.
