@@ -32,14 +32,19 @@ class Redis
     # @return [Redis::Cluster] a new client instance
     def initialize(node_addrs, options = {})
       raise ArgumentError, 'Redis Cluster node config must be Array' unless node_addrs.is_a?(Array)
+      @node_addrs = node_addrs
+      @options = options
+      reconnect
+    end
 
-      startup_nodes = build_clients_per_node(node_addrs, options)
+    def reconnect
+      startup_nodes = build_clients_per_node(@node_addrs, @options)
       available_slots = fetch_available_slots_per_node(startup_nodes.values)
 
       raise CannotConnectError, 'Could not connect to any nodes' if available_slots.nil?
 
       available_node_addrs = extract_available_node_addrs(available_slots)
-      @available_nodes = build_clients_per_node(available_node_addrs, options)
+      @available_nodes = build_clients_per_node(available_node_addrs, @options)
       @slot_node_key_maps = build_slot_node_key_maps(available_slots)
     end
 
@@ -110,6 +115,9 @@ class Redis
 
       node_key = @slot_node_key_maps[slot]
       @available_nodes.fetch(node_key)
+    rescue Exception => ex
+      reconnect if ex.class == KeyError
+      raise ex
     end
 
     # Sends the command and returns its reply. Redirections may occur.

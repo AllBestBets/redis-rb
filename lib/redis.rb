@@ -3,6 +3,17 @@ require_relative "redis/errors"
 
 class Redis
 
+  def self.connect(configs)
+    if configs['is_redis_cluster']
+      nodes = configs['redis_cluster_nodes'].map {|hash| "redis://#{hash['host']}:#{hash['port']}"}
+      puts "connect by redis cluster: #{nodes}"
+      Redis::Cluster.new(nodes)
+    else
+      puts "connect by redis server: #{configs}"
+      Redis.new(configs)
+    end
+  end
+
   def self.current
     @current ||= Redis.new
   end
@@ -2811,5 +2822,6 @@ end
 require_relative "redis/version"
 require_relative "redis/connection"
 require_relative "redis/client"
+require_relative "redis/cluster"
 require_relative "redis/pipeline"
 require_relative "redis/subscribe"
