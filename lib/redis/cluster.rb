@@ -76,6 +76,10 @@ class Redis
       try_cmd(find_node, :synchronize) { |client| client.call(%i[asking]) }
     end
 
+    def keys(pattern = "*")
+      @available_nodes.values.map {|node| node.keys(pattern)}.flatten.uniq
+    end
+
     private
 
     # Delegates to a instance of random node client and returns its reply.
