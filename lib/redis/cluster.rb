@@ -80,6 +80,11 @@ class Redis
       @available_nodes.values.map {|node| node.keys(pattern)}.flatten.uniq
     end
 
+    def mget(*keys)
+      return [] if keys.nil? or keys.empty?
+      keys.flatten.map {|k| k.nil? ? nil : get(k)}
+    end
+
     private
 
     # Delegates to a instance of random node client and returns its reply.
