@@ -70,9 +70,5 @@ create_cluster:
 
 clean:
 	(test -d ${BUILD_DIR} && cd ${BUILD_DIR}/src && make clean distclean) || true
-	(test -f appendonly.aof && rm appendonly.aof) || true
-	for port in ${CLUSTER_PORTS}; do \
-		(test -f ${TMP}/nodes$$port.conf && rm ${TMP}/nodes$$port.conf) || true; \
-	done
 
 .PHONY: all test stop start stop_cluster start_cluster create_cluster clean

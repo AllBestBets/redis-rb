@@ -6,7 +6,7 @@ class Redis
   def self.connect(configs, options = {})
     if configs['is_redis_cluster']
       nodes = configs['redis_cluster_nodes'].map {|hash| "redis://#{hash['host']}:#{hash['port']}"}
-      Redis::Cluster.new(nodes, options)
+      Redis.new(options.merge(cluster: nodes))
     else
       Redis.new(configs)
     end

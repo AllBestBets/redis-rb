@@ -8,7 +8,6 @@ ENV["DRIVER"] ||= "ruby"
 
 require_relative "../lib/redis"
 require_relative "../lib/redis/distributed"
-require_relative "../lib/redis/cluster"
 require_relative "../lib/redis/connection/#{ENV["DRIVER"]}"
 
 require_relative "support/redis_mock"
