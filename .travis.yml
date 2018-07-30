@@ -1,13 +1,19 @@
 language: ruby
+cache:
+    directories:
+      - tmp/cache
+before_install:
+  - gem update --system 2.6.14
+  - gem --version
 
-script: make test
+script: make
 
 rvm:
   - 2.2.2
   - 2.3.3
   - 2.4.1
-  - jruby-9
-  - rbx-3
+  - 2.5.0
+  - jruby-9.1.17.0
 
 gemfile: ".travis/Gemfile"
 
@@ -19,7 +25,7 @@ before_script:
 env:
   global:
     - VERBOSE=true
-    - TIMEOUT=1
+    - TIMEOUT=9
   matrix:
     - DRIVER=ruby      REDIS_BRANCH=3.0
     - DRIVER=ruby      REDIS_BRANCH=3.2
@@ -27,7 +33,7 @@ env:
     - DRIVER=hiredis   REDIS_BRANCH=3.2
     - DRIVER=synchrony REDIS_BRANCH=3.0
     - DRIVER=synchrony REDIS_BRANCH=3.2
-    - DRIVER=ruby      REDIS_BRANCH=unstable
+    - DRIVER=ruby      REDIS_BRANCH=4.0
 
 branches:
   only:
@@ -38,34 +44,16 @@ branches:
 matrix:
   exclude:
     # hiredis
-    - rvm: jruby-9
-      gemfile: .travis/Gemfile
-      env: DRIVER=hiredis REDIS_BRANCH=3.0
-    - rvm: jruby-9
-      gemfile: .travis/Gemfile
-      env: DRIVER=hiredis REDIS_BRANCH=3.2
-    - rvm: jruby-9
-      gemfile: .travis/Gemfile
-      env: DRIVER=hiredis REDIS_BRANCH=3.0
-    - rvm: jruby-9
-      gemfile: .travis/Gemfile
-      env: DRIVER=hiredis REDIS_BRANCH=3.2
+    - rvm: jruby-9.1.17.0
+      env: DRIVER=hiredis   REDIS_BRANCH=3.0
+    - rvm: jruby-9.1.17.0
+      env: DRIVER=hiredis   REDIS_BRANCH=3.2
 
     # synchrony
-    - rvm: jruby-9
-      gemfile: .travis/Gemfile
+    - rvm: jruby-9.1.17.0
       env: DRIVER=synchrony REDIS_BRANCH=3.0
-    - rvm: jruby-9
-      gemfile: .travis/Gemfile
+    - rvm: jruby-9.1.17.0
       env: DRIVER=synchrony REDIS_BRANCH=3.2
-    - rvm: jruby-9
-      gemfile: .travis/Gemfile
-      env: DRIVER=synchrony REDIS_BRANCH=3.0
-    - rvm: jruby-9
-      gemfile: .travis/Gemfile
-      env: DRIVER=synchrony REDIS_BRANCH=3.2
-  allow_failures:
-    - rvm: rbx-3
 
 notifications:
   irc:

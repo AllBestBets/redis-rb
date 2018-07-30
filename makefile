@@ -1,37 +1,43 @@
-TEST_FILES    := $(shell find test -name *_test.rb -type f)
-REDIS_BRANCH  := unstable
-TMP           := tmp
-BUILD_DIR     := ${TMP}/redis-${REDIS_BRANCH}
-TARBALL       := ${TMP}/redis-${REDIS_BRANCH}.tar.gz
-BINARY        := ${BUILD_DIR}/src/redis-server
-REDIS_TRIB    := ${BUILD_DIR}/src/redis-trib.rb
-PID_PATH      := ${TMP}/redis.pid
-SOCKET_PATH   := ${TMP}/redis.sock
-PORT          := 6381
-CLUSTER_PORTS := 7000 7001 7002 7003 7004 7005
+TEST_FILES         := $(shell find ./test -name *_test.rb -type f)
+REDIS_BRANCH       ?= unstable
+TMP                := tmp
+BUILD_DIR          := ${TMP}/cache/redis-${REDIS_BRANCH}
+TARBALL            := ${TMP}/redis-${REDIS_BRANCH}.tar.gz
+BINARY             := ${BUILD_DIR}/src/redis-server
+REDIS_CLIENT       := ${BUILD_DIR}/src/redis-cli
+REDIS_TRIB         := ${BUILD_DIR}/src/redis-trib.rb
+PID_PATH           := ${BUILD_DIR}/redis.pid
+SOCKET_PATH        := ${BUILD_DIR}/redis.sock
+PORT               := 6381
+CLUSTER_PORTS      := 7000 7001 7002 7003 7004 7005
+CLUSTER_PID_PATHS  := $(addprefix ${TMP}/redis,$(addsuffix .pid,${CLUSTER_PORTS}))
+CLUSTER_CONF_PATHS := $(addprefix ${TMP}/nodes,$(addsuffix .conf,${CLUSTER_PORTS}))
+CLUSTER_ADDRS      := $(addprefix 127.0.0.1:,${CLUSTER_PORTS})
 
-test: ${TEST_FILES}
+define kill-redis
+  (ls $1 2> /dev/null && kill $$(cat $1) && rm -f $1) || true
+endef
+
+all:
 	make start
 	make start_cluster
-	env SOCKET_PATH=${SOCKET_PATH} \
-		ruby -v $$(echo $? | tr ' ' '\n' | awk '{ print "-r./" $$0 }') -e ''
+	make create_cluster
+	make test
 	make stop
 	make stop_cluster
 
 ${TMP}:
-	mkdir $@
+	mkdir -p $@
 
-${TARBALL}: ${TMP}
-	wget https://github.com/antirez/redis/archive/${REDIS_BRANCH}.tar.gz -O $@
+${BINARY}: ${TMP}
+	bin/build ${REDIS_BRANCH} $<
 
-${BINARY}: ${TARBALL} ${TMP}
-	rm -rf ${BUILD_DIR}
-	mkdir -p ${BUILD_DIR}
-	tar xf ${TARBALL} -C ${TMP}
-	cd ${BUILD_DIR} && make
+test: ${TEST_FILES}
+	env SOCKET_PATH=${SOCKET_PATH} \
+		bundle exec ruby -v -e 'ARGV.each { |test_file| require test_file }' ${TEST_FILES}
 
 stop:
-	(test -f ${PID_PATH} && (kill $$(cat ${PID_PATH}) || true) && rm -f ${PID_PATH}) || true
+	$(call kill-redis,${PID_PATH})
 
 start: ${BINARY}
 	${BINARY}                     \
@@ -40,10 +46,10 @@ start: ${BINARY}
 		--port       ${PORT}        \
 		--unixsocket ${SOCKET_PATH}
 
-stop_cluster: ${BINARY}
-	for port in ${CLUSTER_PORTS}; do \
-		(test -f ${TMP}/redis$$port.pid && (kill $$(cat ${TMP}/redis$$port.pid) || true) && rm -f ${TMP}/redis$$port.pid) || true; \
-	done
+stop_cluster:
+	$(call kill-redis,${CLUSTER_PID_PATHS})
+	rm -f appendonly.aof || true
+	rm -f ${CLUSTER_CONF_PATHS} || true
 
 start_cluster: ${BINARY}
 	for port in ${CLUSTER_PORTS}; do                    \
@@ -57,14 +63,10 @@ start_cluster: ${BINARY}
 			--port                 $$port                   \
 			--unixsocket           ${TMP}/redis$$port.sock; \
 	done
-	yes yes | bundle exec ruby ${REDIS_TRIB} create \
-		--replicas 1                                  \
-		127.0.0.1:7000                                \
-		127.0.0.1:7001                                \
-		127.0.0.1:7002                                \
-		127.0.0.1:7003                                \
-		127.0.0.1:7004                                \
-		127.0.0.1:7005
+
+create_cluster:
+	yes yes | ((bundle exec ruby ${REDIS_TRIB} create --replicas 1 ${CLUSTER_ADDRS}) || \
+		(${REDIS_CLIENT} --cluster create ${CLUSTER_ADDRS} --cluster-replicas 1))
 
 clean:
 	(test -d ${BUILD_DIR} && cd ${BUILD_DIR}/src && make clean distclean) || true
@@ -73,4 +75,4 @@ clean:
 		(test -f ${TMP}/nodes$$port.conf && rm ${TMP}/nodes$$port.conf) || true; \
 	done
 
-.PHONY: test start stop start_cluster stop_cluster
+.PHONY: all test stop start stop_cluster start_cluster create_cluster clean

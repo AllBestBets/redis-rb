@@ -1,6 +1,8 @@
+# frozen_string_literal: true
+
 class Redis
   class Cluster
-    # Key to slot converter for Redis Cluster
+    # Key to slot converter for Redis Cluster Client
     #
     # We can test it by `CLUSTER KEYSLOT` command.
     #
@@ -12,7 +14,7 @@ class Redis
     #   CLUSTER KEYSLOT command reference
     #
     # Copyright (C) 2013 Salvatore Sanfilippo <antirez@gmail.com>
-    class KeySlotConverter
+    module KeySlotConverter
       XMODEM_CRC16_LOOKUP = [
         0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7,
         0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1ce, 0xf1ef,
@@ -50,12 +52,14 @@ class Redis
 
       HASH_SLOTS = 16_384
 
+      module_function
+
       # Convert key into slot.
       #
       # @param key [String] the key of the redis command
       #
       # @return [Integer] slot number
-      def self.convert(key)
+      def convert(key)
         crc = 0
         key.each_byte do |b|
           crc = ((crc << 8) & 0xffff) ^ XMODEM_CRC16_LOOKUP[((crc >> 8) ^ b) & 0xff]

@@ -40,11 +40,16 @@ class Redis
   # @option options [Boolean] :inherit_socket (false) Whether to use socket in forked process or not
   # @option options [Array] :sentinels List of sentinels to contact
   # @option options [Symbol] :role (:master) Role to fetch via Sentinel, either `:master` or `:slave`
+  # @option options [Array<String, Hash{Symbol => String, Integer}>] :cluster List of cluster nodes to contact
+  # @option options [Boolean] :replica Whether to use readonly replica nodes in Redis Cluster or not
+  # @option options [Class] :connector Class of custom connector
   #
   # @return [Redis] a new client instance
   def initialize(options = {})
     @options = options.dup
-    @original_client = @client = Client.new(options)
+    @cluster_mode = options.key?(:cluster)
+    client = @cluster_mode ? Cluster : Client
+    @original_client = @client = client.new(options)
     @queue = Hash.new { |h, k| h[k] = [] }
 
     super() # Monitor#initialize
@@ -282,9 +287,7 @@ class Redis
     synchronize do |client|
       client.call([:info, cmd].compact) do |reply|
         if reply.kind_of?(String)
-          reply = Hash[reply.split("\r\n").map do |line|
-            line.split(":", 2) unless line =~ /^(#|$)/
-          end.compact]
+          reply = HashifyInfo.call(reply)
 
           if cmd && cmd.to_s == "commandstats"
             # Extract nested hashes for INFO COMMANDSTATS
@@ -530,6 +533,16 @@ class Redis
   def del(*keys)
     synchronize do |client|
       client.call([:del] + keys)
+    end
+  end
+
+  # Unlink one or more keys.
+  #
+  # @param [String, Array<String>] keys
+  # @return [Fixnum] number of keys that were unlinked
+  def unlink(*keys)
+    synchronize do |client|
+      client.call([:unlink] + keys)
     end
   end
 
@@ -2111,9 +2124,9 @@ class Redis
   # @param [String] key
   # @param [String, Array<String>] field
   # @return [Fixnum] the number of fields that were removed from the hash
-  def hdel(key, field)
+  def hdel(key, *fields)
     synchronize do |client|
-      client.call([:hdel, key, field])
+      client.call([:hdel, key, *fields])
     end
   end
 
@@ -2719,6 +2732,86 @@ class Redis
     end
   end
 
+  # Adds the specified geospatial items (latitude, longitude, name) to the specified key
+  #
+  # @param [String] key
+  # @param [Array] member arguemnts for member or members: longitude, latitude, name
+  # @return [Intger] number of elements added to the sorted set
+  def geoadd(key, *member)
+    synchronize do |client|
+      client.call([:geoadd, key, member])
+    end
+  end
+
+  # Returns geohash string representing position for specified members of the specified key.
+  #
+  # @param [String] key
+  # @param [String, Array<String>] member one member or array of members
+  # @return [Array<String, nil>] returns array containg geohash string if member is present, nil otherwise
+  def geohash(key, member)
+    synchronize do |client|
+      client.call([:geohash, key, member])
+    end
+  end
+
+
+  # Query a sorted set representing a geospatial index to fetch members matching a
+  # given maximum distance from a point
+  #
+  # @param [Array] args key, longitude, latitude, radius, unit(m|km|ft|mi)
+  # @param ['asc', 'desc'] sort sort returned items from the nearest to the farthest or the farthest to the nearest relative to the center
+  # @param [Integer] count limit the results to the first N matching items
+  # @param ['WITHDIST', 'WITHCOORD', 'WITHHASH'] options to return additional information
+  # @return [Array<String>] may be changed with `options`
+
+  def georadius(*args, **geoptions)
+    geoarguments = _geoarguments(*args, **geoptions)
+
+    synchronize do |client|
+      client.call([:georadius, *geoarguments])
+    end
+  end
+
+  # Query a sorted set representing a geospatial index to fetch members matching a
+  # given maximum distance from an already existing member
+  #
+  # @param [Array] args key, member, radius, unit(m|km|ft|mi)
+  # @param ['asc', 'desc'] sort sort returned items from the nearest to the farthest or the farthest to the nearest relative to the center
+  # @param [Integer] count limit the results to the first N matching items
+  # @param ['WITHDIST', 'WITHCOORD', 'WITHHASH'] options to return additional information
+  # @return [Array<String>] may be changed with `options`
+
+  def georadiusbymember(*args, **geoptions)
+    geoarguments = _geoarguments(*args, **geoptions)
+
+    synchronize do |client|
+      client.call([:georadiusbymember, *geoarguments])
+    end
+  end
+
+  # Returns longitude and latitude of members of a geospatial index
+  #
+  # @param [String] key
+  # @param [String, Array<String>] member one member or array of members
+  # @return [Array<Array<String>, nil>] returns array of elements, where each element is either array of longitude and latitude or nil
+  def geopos(key, member)
+    synchronize do |client|
+      client.call([:geopos, key, member])
+    end
+  end
+
+  # Returns the distance between two members of a geospatial index
+  #
+  # @param [String ]key
+  # @param [Array<String>] members
+  # @param ['m', 'km', 'mi', 'ft'] unit
+  # @return [String, nil] returns distance in spefied unit if both members present, nil otherwise.
+  def geodist(key, member1, member2, unit = 'm')
+    synchronize do |client|
+      client.call([:geodist, key, member1, member2, unit])
+    end
+  end
+
   # Interact with the sentinel command (masters, master, slaves, failover)
   #
   # @param [String] subcommand e.g. `masters`, `master`, `slaves`
@@ -2746,6 +2839,41 @@ class Redis
     end
   end
 
+  # Sends `CLUSTER *` command to random node and returns its reply.
+  #
+  # @see https://redis.io/commands#cluster Reference of cluster command
+  #
+  # @param subcommand [String, Symbol] the subcommand of cluster command
+  #   e.g. `:slots`, `:nodes`, `:slaves`, `:info`
+  #
+  # @return [Object] depends on the subcommand
+  def cluster(subcommand, *args)
+    subcommand = subcommand.to_s.downcase
+    block = case subcommand
+            when 'slots'  then HashifyClusterSlots
+            when 'nodes'  then HashifyClusterNodes
+            when 'slaves' then HashifyClusterSlaves
+            when 'info'   then HashifyInfo
+            else Noop
+            end
+
+    # @see https://github.com/antirez/redis/blob/unstable/src/redis-trib.rb#L127 raw reply expected
+    block = Noop unless @cluster_mode
+
+    synchronize do |client|
+      client.call([:cluster, subcommand] + args, &block)
+    end
+  end
+
+  # Sends `ASKING` command to random node and returns its reply.
+  #
+  # @see https://redis.io/topics/cluster-spec#ask-redirection ASK redirection
+  #
+  # @return [String] `'OK'`
+  def asking
+    synchronize { |client| client.call(%i[asking]) }
+  end
+
   def id
     @original_client.id
   end
@@ -2759,6 +2887,8 @@ class Redis
   end
 
   def connection
+    return @original_client.connection_info if @cluster_mode
+
     {
       host:     @original_client.host,
       port:     @original_client.port,
@@ -2814,13 +2944,73 @@ private
     }
 
   FloatifyPairs =
-    lambda { |array|
-      if array
-        array.each_slice(2).map do |member, score|
+    lambda { |result|
+      if result.respond_to?(:each_slice)
+        result.each_slice(2).map do |member, score|
           [member, Floatify.call(score)]
         end
+      else
+        result
       end
     }
+
+  HashifyInfo =
+    lambda { |reply|
+      Hash[reply.split("\r\n").map do |line|
+        line.split(':', 2) unless line =~ /^(#|$)/
+      end.compact]
+    }
+
+  HashifyClusterNodeInfo =
+    lambda { |str|
+      arr = str.split(' ')
+      {
+        'node_id'        => arr[0],
+        'ip_port'        => arr[1],
+        'flags'          => arr[2].split(','),
+        'master_node_id' => arr[3],
+        'ping_sent'      => arr[4],
+        'pong_recv'      => arr[5],
+        'config_epoch'   => arr[6],
+        'link_state'     => arr[7],
+        'slots'          => arr[8].nil? ? nil : Range.new(*arr[8].split('-'))
+      }
+    }
+
+  HashifyClusterSlots =
+    lambda { |reply|
+      reply.map do |arr|
+        first_slot, last_slot = arr[0..1]
+        master = { 'ip' => arr[2][0], 'port' => arr[2][1], 'node_id' => arr[2][2] }
+        replicas = arr[3..-1].map { |r| { 'ip' => r[0], 'port' => r[1], 'node_id' => r[2] } }
+        {
+          'start_slot' => first_slot,
+          'end_slot'   => last_slot,
+          'master'     => master,
+          'replicas'   => replicas
+        }
+      end
+    }
+
+  HashifyClusterNodes =
+    lambda { |reply|
+      reply.split(/[\r\n]+/).map { |str| HashifyClusterNodeInfo.call(str) }
+    }
+
+  HashifyClusterSlaves =
+    lambda { |reply|
+      reply.map { |str| HashifyClusterNodeInfo.call(str) }
+    }
+
+  Noop = ->(reply) { reply }
+
+  def _geoarguments(*args, options: nil, sort: nil, count: nil)
+    args.push sort if sort
+    args.push 'count', count if count
+    args.push options if options
+
+    args.uniq
+  end
 
   def _subscription(method, timeout, channels, block)
     return @client.call([method] + channels) if subscribed?
@@ -2836,7 +3026,6 @@ private
       @client = original
     end
   end
-
 end
 
 require_relative "redis/version"
