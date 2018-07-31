@@ -217,24 +217,33 @@ class Redis
     rescue CommandError => err
       if err.message.start_with?('MOVED')
         assign_redirection_node(err.message).public_send(method_name, *args, &block)
+
+      elsif err.message.start_with?('CLUSTERDOWN')
+        raise err if retry_count <= 0
+        @option = Option.new(@options)
+        @node, @slot = fetch_cluster_info!(@option)
+        @command = fetch_command_details(@node)
+        retry_count -= 1
+        retry
+
       elsif err.message.start_with?('ASK')
         raise if retry_count <= 0
         node = assign_asking_node(err.message)
         node.call(%i[asking])
         retry_count -= 1
         retry
+
       else
         raise
       end
     rescue Redis::CannotConnectError => err
       raise err if retry_count <= 0
-
       @option = Option.new(@options)
       @node, @slot = fetch_cluster_info!(@option)
       @command = fetch_command_details(@node)
-
       retry_count -= 1
       retry
+
     end
 
     def assign_redirection_node(err_msg)
