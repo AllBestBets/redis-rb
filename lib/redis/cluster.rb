@@ -22,6 +22,7 @@ class Redis
   # Copyright (C) 2013 Salvatore Sanfilippo <antirez@gmail.com>
   class Cluster
     def initialize(options = {})
+      @options = options
       @option = Option.new(options)
       @node, @slot = fetch_cluster_info!(@option)
       @command = fetch_command_details(@node)
@@ -225,6 +226,15 @@ class Redis
       else
         raise
       end
+    rescue Redis::CannotConnectError => err
+      raise err if retry_count <= 0
+
+      @option = Option.new(@options)
+      @node, @slot = fetch_cluster_info!(@option)
+      @command = fetch_command_details(@node)
+
+      retry_count -= 1
+      retry
     end
 
     def assign_redirection_node(err_msg)
