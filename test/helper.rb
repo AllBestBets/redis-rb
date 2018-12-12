@@ -159,6 +159,10 @@ module Helper
       end
     end
 
+    def omit_version(min_ver)
+      omit("Requires Redis > #{min_ver}") if version < min_ver
+    end
+
     def version
       Version.new(redis.info['redis_version'])
     end
@@ -182,7 +186,7 @@ module Helper
   module Distributed
     include Generic
 
-    NODES = ["redis://127.0.0.1:#{PORT}/15"].freeze
+    NODES = ["redis://127.0.0.1:#{PORT}/#{DB}"].freeze
 
     def version
       Version.new(redis.info.first["redis_version"])
@@ -297,7 +301,7 @@ module Helper
     end
 
     def redis_cluster_down
-      trib = ClusterOrchestrator.new(_default_nodes)
+      trib = ClusterOrchestrator.new(_default_nodes, timeout: TIMEOUT)
       trib.down
       yield
     ensure
@@ -306,7 +310,7 @@ module Helper
     end
 
     def redis_cluster_failover
-      trib = ClusterOrchestrator.new(_default_nodes)
+      trib = ClusterOrchestrator.new(_default_nodes, timeout: TIMEOUT)
       trib.failover
       yield
     ensure
@@ -318,7 +322,7 @@ module Helper
     # @param src [String] <ip>:<port>
     # @param dest [String] <ip>:<port>
     def redis_cluster_resharding(slot, src:, dest:)
-      trib = ClusterOrchestrator.new(_default_nodes)
+      trib = ClusterOrchestrator.new(_default_nodes, timeout: TIMEOUT)
       trib.start_resharding(slot, src, dest)
       yield
       trib.finish_resharding(slot, dest)
