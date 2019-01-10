@@ -67,6 +67,22 @@ module Lint
       end
     end
 
+    class FakeDuration
+      def initialize(int)
+        @int = int
+      end
+
+      def to_int
+        @int
+      end
+    end
+
+    def test_blpop_integer_like_timeout
+      mock do |r|
+        assert_equal ["{zap}foo", "1"], r.blpop("{zap}foo", FakeDuration.new(1))
+      end
+    end
+
     def test_blpop_with_old_prototype
       assert_equal ['{zap}foo', 's1'], r.blpop('{zap}foo', 0)
       assert_equal ['{zap}foo', 's2'], r.blpop('{zap}foo', 0)
@@ -134,14 +150,16 @@ module Lint
     end
 
     def test_bzpopmin
-      target_version('4.9.0') do
-        assert_equal %w[{szap}foo a 0], r.bzpopmin('{szap}foo', '{szap}bar', 0)
+      target_version('5.0.0') do
+        assert_equal ['{szap}foo', 'a', 0.0], r.bzpopmin('{szap}foo', '{szap}bar', 1)
+        assert_equal nil, r.bzpopmin('{szap}aaa', '{szap}bbb', 1)
       end
     end
 
     def test_bzpopmax
-      target_version('4.9.0') do
-        assert_equal %w[{szap}foo c 2], r.bzpopmax('{szap}foo', '{szap}bar', 0)
+      target_version('5.0.0') do
+        assert_equal ['{szap}foo', 'c', 2.0], r.bzpopmax('{szap}foo', '{szap}bar', 1)
+        assert_equal nil, r.bzpopmax('{szap}aaa', '{szap}bbb', 1)
       end
     end
 

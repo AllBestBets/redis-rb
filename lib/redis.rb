@@ -1165,15 +1165,14 @@ class Redis
     end
   end
 
-  def _bpop(cmd, args)
+  def _bpop(cmd, args, &blk)
     options = {}
 
-    case args.last
-    when Hash
+    if args.last.is_a?(Hash)
       options = args.pop
-    when Integer
+    elsif args.last.respond_to?(:to_int)
       # Issue deprecation notice in obnoxious mode...
-      options[:timeout] = args.pop
+      options[:timeout] = args.pop.to_int
     end
 
     if args.size > 1
@@ -1186,7 +1185,7 @@ class Redis
     synchronize do |client|
       command = [cmd, keys, timeout]
       timeout += client.timeout if timeout > 0
-      client.call_with_timeout(command, timeout)
+      client.call_with_timeout(command, timeout, &blk)
     end
   end
 
@@ -1634,6 +1633,90 @@ class Redis
           Boolify.call(reply)
         end
       end
+    end
+  end
+
+  # Removes and returns up to count members with the highest scores in the sorted set stored at key.
+  #
+  # @example Popping a member
+  #   redis.zpopmax('zset')
+  #   #=> ['b', 2.0]
+  # @example With count option
+  #   redis.zpopmax('zset', 2)
+  #   #=> [['b', 2.0], ['a', 1.0]]
+  #
+  # @params key [String] a key of the sorted set
+  # @params count [Integer] a number of members
+  #
+  # @return [Array<String, Float>] element and score pair if count is not specified
+  # @return [Array<Array<String, Float>>] list of popped elements and scores
+  def zpopmax(key, count = nil)
+    synchronize do |client|
+      members = client.call([:zpopmax, key, count].compact, &FloatifyPairs)
+      count.to_i > 1 ? members : members.first
+    end
+  end
+
+  # Removes and returns up to count members with the lowest scores in the sorted set stored at key.
+  #
+  # @example Popping a member
+  #   redis.zpopmin('zset')
+  #   #=> ['a', 1.0]
+  # @example With count option
+  #   redis.zpopmin('zset', 2)
+  #   #=> [['a', 1.0], ['b', 2.0]]
+  #
+  # @params key [String] a key of the sorted set
+  # @params count [Integer] a number of members
+  #
+  # @return [Array<String, Float>] element and score pair if count is not specified
+  # @return [Array<Array<String, Float>>] list of popped elements and scores
+  def zpopmin(key, count = nil)
+    synchronize do |client|
+      members = client.call([:zpopmin, key, count].compact, &FloatifyPairs)
+      count.to_i > 1 ? members : members.first
+    end
+  end
+
+  # Removes and returns up to count members with the highest scores in the sorted set stored at keys,
+  #   or block until one is available.
+  #
+  # @example Popping a member from a sorted set
+  #   redis.bzpopmax('zset', 1)
+  #   #=> ['zset', 'b', 2.0]
+  # @example Popping a member from multiple sorted sets
+  #   redis.bzpopmax('zset1', 'zset2', 1)
+  #   #=> ['zset1', 'b', 2.0]
+  #
+  # @params keys [Array<String>] one or multiple keys of the sorted sets
+  # @params timeout [Integer] the maximum number of seconds to block
+  #
+  # @return [Array<String, String, Float>] a touple of key, member and score
+  # @return [nil] when no element could be popped and the timeout expired
+  def bzpopmax(*args)
+    _bpop(:bzpopmax, args) do |reply|
+      reply.is_a?(Array) ? [reply[0], reply[1], Floatify.call(reply[2])] : reply
+    end
+  end
+
+  # Removes and returns up to count members with the lowest scores in the sorted set stored at keys,
+  #   or block until one is available.
+  #
+  # @example Popping a member from a sorted set
+  #   redis.bzpopmin('zset', 1)
+  #   #=> ['zset', 'a', 1.0]
+  # @example Popping a member from multiple sorted sets
+  #   redis.bzpopmin('zset1', 'zset2', 1)
+  #   #=> ['zset1', 'a', 1.0]
+  #
+  # @params keys [Array<String>] one or multiple keys of the sorted sets
+  # @params timeout [Integer] the maximum number of seconds to block
+  #
+  # @return [Array<String, String, Float>] a touple of key, member and score
+  # @return [nil] when no element could be popped and the timeout expired
+  def bzpopmin(*args)
+    _bpop(:bzpopmin, args) do |reply|
+      reply.is_a?(Array) ? [reply[0], reply[1], Floatify.call(reply[2])] : reply
     end
   end
 
@@ -2915,13 +2998,31 @@ class Redis
   #   redis.xrange('mystream', count: 10)
   #
   # @param key   [String]  the stream key
-  # @param first [String]  first entry id of range, default value is `-`
-  # @param last  [String]  last entry id of range, default value is `+`
+  # @param start  [String]  first entry id of range, default value is `+`
+  # @param end [String]  last entry id of range, default value is `-`
   # @param count [Integer] the number of entries as limit
   #
   # @return [Hash{String => Hash}] the entries
-  def xrange(key, first: '-', last: '+', count: nil)
-    args = [:xrange, key, first, last]
+
+  # Fetches entries of the stream in ascending order.
+  #
+  # @example Without options
+  #   redis.xrange('mystream')
+  # @example With a specific start
+  #   redis.xrange('mystream', '0-1')
+  # @example With a specific start and end
+  #   redis.xrange('mystream', '0-1', '0-3')
+  # @example With count options
+  #   redis.xrange('mystream', count: 10)
+  #
+  # @param key [String]  the stream key
+  # @param start [String]  first entry id of range, default value is `-`
+  # @param end [String]  last entry id of range, default value is `+`
+  # @param count [Integer] the number of entries as limit
+  #
+  # @return [Array<Array<String, Hash>>] the ids and entries pairs
+  def xrange(key, start = '-', _end = '+', count: nil)
+    args = [:xrange, key, start, _end]
     args.concat(['COUNT', count]) if count
     synchronize { |client| client.call(args, &HashifyStreamEntries) }
   end
@@ -2930,21 +3031,21 @@ class Redis
   #
   # @example Without options
   #   redis.xrevrange('mystream')
-  # @example With first entry id option
-  #   redis.xrevrange('mystream', first: '0-1')
-  # @example With first and last entry id options
-  #   redis.xrevrange('mystream', first: '0-1', last: '0-3')
+  # @example With a specific end
+  #   redis.xrevrange('mystream', '0-3')
+  # @example With a specific end and start
+  #   redis.xrevrange('mystream', '0-3', '0-1')
   # @example With count options
   #   redis.xrevrange('mystream', count: 10)
   #
-  # @param key   [String]  the stream key
-  # @param first [String]  first entry id of range, default value is `-`
-  # @param last  [String]  last entry id of range, default value is `+`
-  # @param count [Integer] the number of entries as limit
+  # @param key [String]  the stream key
+  # @param end [String]  first entry id of range, default value is `+`
+  # @param start [String]  last entry id of range, default value is `-`
+  # @params count [Integer] the number of entries as limit
   #
-  # @return [Hash{String => Hash}] the entries
-  def xrevrange(key, first: '-', last: '+', count: nil)
-    args = [:xrevrange, key, last, first]
+  # @return [Array<Array<String, Hash>>] the ids and entries pairs
+  def xrevrange(key, _end = '+', start = '-', count: nil)
+    args = [:xrevrange, key, _end, start]
     args.concat(['COUNT', count]) if count
     synchronize { |client| client.call(args, &HashifyStreamEntries) }
   end
@@ -2980,8 +3081,8 @@ class Redis
   # @return [Hash{String => Hash{String => Hash}}] the entries
   def xread(keys, ids, count: nil, block: nil)
     args = [:xread]
-    args.concat(['COUNT', count])      if count
-    args.concat(['BLOCK', block.to_i]) if block
+    args << 'COUNT' << count if count
+    args << 'BLOCK' << block.to_i if block
     _xread(args, keys, ids, block)
   end
 
@@ -3038,9 +3139,9 @@ class Redis
   # @return [Hash{String => Hash{String => Hash}}] the entries
   def xreadgroup(group, consumer, keys, ids, opts = {})
     args = [:xreadgroup, 'GROUP', group, consumer]
-    args.concat(['COUNT', opts[:count]])      if opts[:count]
-    args.concat(['BLOCK', opts[:block].to_i]) if opts[:block]
-    args << 'NOACK'                           if opts[:noack]
+    args << 'COUNT' << opts[:count] if opts[:count]
+    args << 'BLOCK' << opts[:block].to_i if opts[:block]
+    args << 'NOACK' if opts[:noack]
     _xread(args, keys, ids, opts[:block])
   end
 
@@ -3111,26 +3212,31 @@ class Redis
   # @example With key and group
   #   redis.xpending('mystream', 'mygroup')
   # @example With range options
-  #   redis.xpending('mystream', 'mygroup', first: '-', last: '+', count: 10)
+  #   redis.xpending('mystream', 'mygroup', '-', '+', 10)
   # @example With range and consumer options
-  #   redis.xpending('mystream', 'mygroup', 'consumer1', first: '-', last: '+', count: 10)
+  #   redis.xpending('mystream', 'mygroup', '-', '+', 10, 'consumer1')
   #
-  # @param key      [String] the stream key
-  # @param group    [String] the consumer group name
-  # @param consumer [String] the consumer name
-  # @param opts     [Hash]   several options for `XPENDING` command
-  #
-  # @option opts [String]  :first first entry id of range
-  # @option opts [String]  :last  last entry id of range
-  # @option opts [Integer] :count the number of entries as limit
+  # @param key      [String]  the stream key
+  # @param group    [String]  the consumer group name
+  # @param start    [String]  start first entry id of range
+  # @param end      [String]  end   last entry id of range
+  # @param count    [Integer] count the number of entries as limit
+  # @param consumer [String]  the consumer name
   #
   # @return [Hash]        the summary of pending entries
   # @return [Array<Hash>] the pending entries details if options were specified
-  def xpending(key, group, consumer = nil, **opts)
-    args = [:xpending, key, group, opts[:first], opts[:last], opts[:count], consumer].compact
-    summary_needed = consumer.nil? && opts.empty?
+  def xpending(key, group, *args)
+    command_args = [:xpending, key, group]
+    case args.size
+    when 0, 3, 4
+      command_args.concat(args)
+    else
+      raise ArgumentError, "wrong number of arguments (given #{args.size + 2}, expected 2, 5 or 6)"
+    end
+
+    summary_needed = args.empty?
     blk = summary_needed ? HashifyStreamPendings : HashifyStreamPendingDetails
-    synchronize { |client| client.call(args, &blk) }
+    synchronize { |client| client.call(command_args, &blk) }
   end
 
   # Interact with the sentinel command (masters, master, slaves, failover)
@@ -3290,7 +3396,7 @@ private
     lambda { |reply|
       reply.map do |entry_id, values|
         [entry_id, values.each_slice(2).to_h]
-      end.to_h
+      end
     }
 
   HashifyStreamPendings =
@@ -3384,7 +3490,9 @@ private
   def _xread(args, keys, ids, blocking_timeout_msec)
     keys = keys.is_a?(Array) ? keys : [keys]
     ids = ids.is_a?(Array) ? ids : [ids]
-    args.concat(['STREAMS'], keys, ids)
+    args << 'STREAMS'
+    args.concat(keys)
+    args.concat(ids)
 
     synchronize do |client|
       if blocking_timeout_msec.nil?
